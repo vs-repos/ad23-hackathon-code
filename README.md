@@ -7,7 +7,7 @@ grid and the score breakdown, pin a talk and re-run, export JSON or print.
 - **Scheduler** — a pure Python module with no framework imports. This is where every scheduling
   rule lives; the HTTP layer only maps rows in and out.
 - **Frontend** — Next.js (App Router) + TypeScript + Tailwind. The browser calls only same-origin
-  `/api/*`; Next.js rewrites that to the backend origin.
+  `/api/*`; middleware rewrites that to the backend origin per request.
 
 No Docker, no auth, no external optimizer.
 
@@ -109,7 +109,10 @@ $env:BACKEND_ORIGIN = "http://127.0.0.1:8000"; npm run dev
 BACKEND_ORIGIN=http://127.0.0.1:8000 npm run dev
 ```
 
-Default is `http://127.0.0.1:8000`, which is what the command above uses.
+Deploy note (RelaxDev and any host): set `BACKEND_ORIGIN` to the backend origin **including scheme**,
+e.g. `https://backend.example`. The value is read per request by `middleware.ts`, never baked into a
+rewrite at build time, so `next build` does not need it. A missing or invalid value makes `/api/*`
+return 503 `BACKEND_NOT_CONFIGURED` instead of failing the build.
 
 Production build:
 

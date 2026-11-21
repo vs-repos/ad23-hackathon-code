@@ -1,4 +1,4 @@
-/** All backend traffic goes through same-origin /api/*, proxied by next.config.js. */
+/** All backend traffic goes through same-origin /api/*, proxied by middleware.ts. */
 import type {
   ApiErrorBody,
   Conference,
