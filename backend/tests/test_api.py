@@ -107,6 +107,37 @@ def test_empty_availability_accepted(empty_client):
     assert talk["unavailability"] == []
 
 
+def test_demo_talks_load_once_and_never_duplicate(client):
+    """18 talks from demo_talks.json, and a second seed pass adds nothing."""
+    first = client.get("/api/talks").json()
+    assert first["total"] == 18
+    speakers = {item["speaker_name"] for item in first["items"]}
+    assert len(speakers) == 8
+    assert sum(1 for item in first["items"] if item["heavy"]) == 3
+    assert sum(1 for item in first["items"] if item["length_minutes"] == 80) == 2
+    assert all(item["interest_source"] == "manual" for item in first["items"])
+
+    from app.seed import seed_if_empty
+
+    session = client.app.state.session_factory()
+    try:
+        seed_if_empty(session)
+        session.commit()
+    finally:
+        session.close()
+    assert client.get("/api/talks").json()["total"] == 18
+
+
+def test_demo_talk_windows_reach_the_api(client):
+    items = client.get("/api/talks").json()["items"]
+    morning_only = [i for i in items if i["availability"]]
+    assert len(morning_only) == 5  # Marina x3, Lena x2 — day 1 morning window
+    assert all(w["day"] == 1 and w["end_minute"] == 220 for i in morning_only for w in i["availability"])
+    late = [i for i in items if i["unavailability"]]
+    assert len(late) == 2  # Tomas: last two hours of day 2
+    assert all(w["day"] == 2 and (w["start_minute"], w["end_minute"]) == (420, 540) for i in late for w in i["unavailability"])
+
+
 def test_solve_on_seeded_demo_talks(client):
     client.patch("/api/conference", json={"scoring": {"solve_timeout_ms": 8000}})
     response = client.post("/api/runs", json={})

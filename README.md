@@ -21,7 +21,8 @@ code/
     app/services.py    DB <-> SolveInput/SolveOutput mapping, persistence, export payloads, hour scores
     app/main.py        FastAPI app factory, every endpoint, the single error shape
     app/schemas.py     Pydantic wire models
-    app/seed.py        first-start conference, rooms, fixed blocks, 8 demo talks
+    app/seed.py        first-start conference, rooms, fixed blocks; loads demo_talks.json
+    app/demo_talks.json  18 fictional demo talks (len/interest/heavy/availability)
     app/llm_score.py   OpenAI-compatible client for POST /api/score (never imported by scheduler.py)
     tests/             pytest: unit tests on the pure solver + API tests + mocked LLM tests
     data/agenda.db     created on first start (gitignored)
@@ -50,9 +51,11 @@ python -m uvicorn app.main:app --reload --port 8000
 ```
 
 The import path is `app.main:app`. On first start the app creates `code/backend/data/agenda.db`
-and seeds one conference, four rooms, the fixed blocks, and eight demo talks, so the UI is not
-blank. An existing `agenda.db` from before D-08 is upgraded in place: on startup `init_db` adds
-the three missing `talk` columns if they are absent. No table is dropped and no row is deleted.
+and seeds one conference, four rooms, the fixed blocks, and 18 demo talks, so the UI is not
+blank. Demo talks load from `backend/app/demo_talks.json` on first start, and only when the talk
+table is empty — an existing database is never reseeded or duplicated. An existing `agenda.db`
+from before D-08 is upgraded in place: on startup `init_db` adds the three missing `talk` columns
+if they are absent. No table is dropped and no row is deleted.
 
 - Swagger UI: <http://127.0.0.1:8000/docs>
 - OpenAPI JSON: <http://127.0.0.1:8000/openapi.json>
@@ -75,6 +78,18 @@ Groq's free tier is the default. OpenRouter example: `AGENDA_LLM_BASE_URL=https:
 endpoint answers 503 `LLM_NOT_CONFIGURED` and the form still accepts a hand-typed score — the operator
 is always the authority. `code/backend/.env.example` lists the three names with empty values; copy the
 names into your shell or platform config, this repo ships no `.env` file.
+
+| Variable | Default | Note |
+|---|---|---|
+| `AGENDA_LLM_DEMO_FALLBACK` | `off` | set `on` to allow the keyless demo endpoint when no key is set |
+
+Demo fallback (opt-in, no key needed): with `AGENDA_LLM_DEMO_FALLBACK=on` and no API key, the score
+button calls `https://text.pollinations.ai/openai/chat/completions`, an anonymous public chat endpoint.
+It returned HTTP 200 with parseable JSON when probed on 2026-11-21, but it is third-party, unversioned
+and can vanish or rate-limit without notice. Every suggestion from this path has a `reason` starting
+with `demo-unverified: ` so the UI and the operator can see it did not come from a keyed provider. If
+the endpoint is unreachable the response is 503 `LLM_NOT_CONFIGURED`; if it returns unusable JSON the
+response is 502 `LLM_BAD_RESPONSE`. No score is ever invented, and manual entry always works.
 
 ## Run the frontend
 
@@ -111,11 +126,11 @@ cd code/backend
 python -m pytest -q
 ```
 
-60 tests: unit tests over the pure scheduler (contiguity, speaker double-booking, availability and
+67 tests: unit tests over the pure scheduler (contiguity, speaker double-booking, availability and
 unavailability, fixed blocks, rhythm bands, collision and heavy penalties, `placed_count`
 lexicographic ordering, determinism, pins), API tests through FastAPI's `TestClient` against a
-temporary SQLite file per test, and `POST /api/score` tests with the HTTP layer always mocked. No
-test calls a live model.
+temporary SQLite file per test, and `POST /api/score` tests with the HTTP layer always mocked —
+including the demo fallback path and its `off` default. No test calls a live model or endpoint.
 
 ## How the solver decides
 
@@ -142,7 +157,7 @@ Every path is in `product/contracts/openapi-outline.md` and in `/docs`. Summaris
 |---|---|---|
 | GET | `/api/health` | never touches the database |
 | GET / PATCH | `/api/conference` | PATCH does not use 409 |
-| POST | `/api/score` | AI proposes `interest` + `heavy`; no DB write; 503 without a key, 502 on a bad answer |
+| POST | `/api/score` | AI proposes `interest` + `heavy`; no DB write; 503 without a key (or an unreachable demo fallback), 502 on a bad answer |
 | GET / POST | `/api/talks` | 80-talk cap, 409 `TALK_LIMIT_EXCEEDED`; carries `interest_source` / `heavy_source` / `ai_reason` |
 | GET / PUT / DELETE | `/api/talks/{id}` | 409 `TALK_PINNED` while pinned |
 | GET | `/api/grid` | every slot with `assignable` and `blocked_by` |

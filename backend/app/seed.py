@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -10,20 +13,14 @@ from .db import AvailabilityWindow, Conference, FixedBlock, Room, Speaker, Talk
 
 CONFERENCE_NAME = "Analyst Days"
 
-# Eight demo talks, three speakers, mixed lengths. Two interest-5 talks must not
-# share a start when an alternative exists; one heavy talk; one morning-only
-# speaker. Ids are left to the database.
-DEMO_TALKS = [
-    # (speaker, title, abstract, minutes, interest, heavy, availability, unavailability)
-    ("Marina Volkov", "Requirements that survive the roadmap", "How to keep a spec alive after the kickoff.", 40, 5, False, [], []),
-    ("Marina Volkov", "Stakeholder maps in practice", "Reading the room before the room reads your deck.", 20, 4, False, [], []),
-    ("Ilya Petrov", "Event storming an accounting core", "A worked example from a legacy replacement.", 80, 5, True, [], []),
-    ("Ilya Petrov", "Metrics the team can actually move", "Choosing three numbers and ignoring the other forty.", 40, 3, False, [(1, 120, 360)], []),
-    ("Sofia Brandt", "Data contracts without a platform team", "Small-scale schema ownership that held for a year.", 20, 2, False, [], []),
-    ("Sofia Brandt", "Migration postmortems, honestly told", "Two failed cutovers and what was learned.", 40, 4, False, [], []),
-    ("Marina Volkov", "Analyst as translator, not gatekeeper", "Where the role actually adds leverage.", 20, 3, False, [], [(1, 260, 320)]),
-    ("Ilya Petrov", "The long workshop format", "Four hours of facilitation compressed into eighty minutes.", 80, 2, True, [], []),
-]
+# The demo programme lives in JSON so the operator can edit it without touching
+# code. Loaded only when the talk table is empty, so a live database is never
+# duplicated or overwritten.
+DEMO_TALKS_PATH = Path(__file__).with_name("demo_talks.json")
+
+
+def load_demo_talks(path: Path = DEMO_TALKS_PATH) -> list[dict]:
+    return json.loads(path.read_text(encoding="utf-8"))["talks"]
 
 
 def _block(conference_id: int, block: sched.FixedBlock) -> FixedBlock:
@@ -59,30 +56,38 @@ def seed_if_empty(session: Session) -> None:
     session.flush()
 
     speakers: dict[str, Speaker] = {}
-    for name, title, abstract, minutes, interest, heavy, availability, unavailability in DEMO_TALKS:
+    for row in load_demo_talks():
+        name = row["speaker_name"]
         speaker = speakers.get(name)
         if speaker is None:
             speaker = Speaker(name=name)
             session.add(speaker)
             session.flush()
             speakers[name] = speaker
+        minutes = row["length_minutes"]
         talk = Talk(
             conference_id=conference.id,
             speaker_id=speaker.id,
-            title=title,
-            abstract=abstract,
+            title=row["title"],
+            abstract=row.get("abstract"),
             length_minutes=minutes,
             slots_needed=minutes // sched.SLOT_MINUTES,
-            interest=interest,
-            heavy=heavy,
+            interest=row["interest"],
+            heavy=row.get("heavy", False),
+            interest_source=row.get("interest_source") or "manual",
+            heavy_source=row.get("heavy_source") or "manual",
         )
         session.add(talk)
         session.flush()
-        for kind, windows in (("AVAILABLE", availability), ("UNAVAILABLE", unavailability)):
-            for day, start, end in windows:
+        for kind, key in (("AVAILABLE", "availability"), ("UNAVAILABLE", "unavailability")):
+            for window in row.get(key) or []:
                 session.add(
                     AvailabilityWindow(
-                        talk_id=talk.id, kind=kind, day=day, start_minute=start, end_minute=end
+                        talk_id=talk.id,
+                        kind=kind,
+                        day=window["day"],
+                        start_minute=window["start_minute"],
+                        end_minute=window["end_minute"],
                     )
                 )
     session.flush()

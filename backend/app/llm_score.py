@@ -19,6 +19,13 @@ DEFAULT_MODEL = "llama-3.1-8b-instant"
 TIMEOUT_SECONDS = 20.0
 MAX_REASON_CHARS = 400
 
+# Demo-only keyless fallback. Verified 200 + parseable JSON on 2026-11-21;
+# the public endpoint can vanish without notice, so it is opt-in and flagged.
+DEMO_FALLBACK_URL = "https://text.pollinations.ai/openai/chat/completions"
+DEMO_FALLBACK_MODEL = "openai"
+DEMO_TIMEOUT_SECONDS = 15.0
+DEMO_REASON_PREFIX = "demo-unverified: "
+
 SYSTEM_PROMPT = (
     "You score talks for a two-day analyst conference. "
     "Answer with JSON only, no prose and no code fence. "
@@ -43,6 +50,29 @@ def _bad_response(problem: str, received=None) -> ApiError:
     if received is not None:
         detail["received"] = received if isinstance(received, (int, float, str, bool)) else str(received)
     return ApiError(502, "LLM_BAD_RESPONSE", "the scoring model did not return a usable score", [detail])
+
+
+def _demo_fallback_on() -> bool:
+    return (os.environ.get("AGENDA_LLM_DEMO_FALLBACK") or "off").strip().lower() == "on"
+
+
+def _demo_completion(messages: list[dict]) -> str:
+    """One keyless POST to the public demo endpoint. Tests monkeypatch ``httpx.post``."""
+    try:
+        response = httpx.post(
+            DEMO_FALLBACK_URL,
+            json={"model": DEMO_FALLBACK_MODEL, "messages": messages},
+            timeout=DEMO_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        raise ApiError(
+            503,
+            "LLM_NOT_CONFIGURED",
+            "the demo fallback endpoint is unreachable; enter interest and heavy by hand",
+            [{"problem": "demo_fallback_unreachable"}],
+        )
 
 
 def _chat_completion(base_url: str, api_key: str, model: str, messages: list[dict]) -> str:
@@ -114,13 +144,17 @@ def _validated(data) -> dict:
 
 def score_talk(title: str, abstract: str | None, length_min: int) -> dict:
     base_url, api_key, model = config()
-    if not api_key:
-        raise ApiError(
-            503,
-            "LLM_NOT_CONFIGURED",
-            "no AI scoring key is configured; set AGENDA_LLM_API_KEY or GROQ_API_KEY, "
-            "or enter interest and heavy by hand",
-            [],
-        )
-    content = _chat_completion(base_url, api_key, model, _messages(title, abstract, length_min))
-    return _validated(_extract(content))
+    messages = _messages(title, abstract, length_min)
+    if api_key:
+        return _validated(_extract(_chat_completion(base_url, api_key, model, messages)))
+    if _demo_fallback_on():
+        result = _validated(_extract(_demo_completion(messages)))
+        result["reason"] = (DEMO_REASON_PREFIX + result["reason"])[:MAX_REASON_CHARS]
+        return result
+    raise ApiError(
+        503,
+        "LLM_NOT_CONFIGURED",
+        "no AI scoring key is configured; set AGENDA_LLM_API_KEY or GROQ_API_KEY, "
+        "or enter interest and heavy by hand",
+        [],
+    )
