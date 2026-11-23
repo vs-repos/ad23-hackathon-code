@@ -30,8 +30,10 @@ code/
   frontend/
     app/page.tsx       landing page
     app/agenda/page.tsx  the tool
+    app/api/           Next route handlers: the same contract as the Python backend
     components/        talk form, grid table
-    lib/               typed API client
+    lib/               typed API client, scheduler.ts (pure port), db.ts (better-sqlite3)
+    data/demo_talks.json  copy of the backend demo programme, seeded on first request
 ```
 
 ## Requirements
@@ -109,10 +111,18 @@ $env:BACKEND_ORIGIN = "http://127.0.0.1:8000"; npm run dev
 BACKEND_ORIGIN=http://127.0.0.1:8000 npm run dev
 ```
 
-Deploy note (RelaxDev and any host): set `BACKEND_ORIGIN` to the backend origin **including scheme**,
-e.g. `https://backend.example`. The value is read per request by `middleware.ts`, never baked into a
-rewrite at build time, so `next build` does not need it. A missing or invalid value makes `/api/*`
-return 503 `BACKEND_NOT_CONFIGURED` instead of failing the build.
+Deploy note (RelaxDev and any host): RelaxDev runs **one** Next container, so `BACKEND_ORIGIN` is left
+unset there and `/api/*` is served by Next's own route handlers under `frontend/app/api/` (the same
+contract as the Python backend, plus the scheduler ported to `frontend/lib/scheduler.ts`). Set
+`BACKEND_ORIGIN` to a backend origin **including scheme** (e.g. `https://backend.example`) only for the
+split local-dev setup; `middleware.ts` then rewrites `/api/*` to it per request. The value is read per
+request and never baked into a rewrite, so `next build` does not need it, and the placeholder
+`auto-generated-stub-for-build` is treated as unset.
+
+On the single container the SQLite file defaults to `/tmp/agenda.db` on the host — ephemeral, wiped on
+redeploy. Override with `AGENDA_DB_PATH`. The demo talks load from `frontend/data/demo_talks.json` on
+the first request that touches the database, only when the conference table is empty. The Python
+`backend/data/agenda.db` is a different file and is never opened.
 
 Production build:
 
